@@ -1,0 +1,150 @@
+# Publica uma nova versão de cada componente Greengrass a cada push na main.
+#
+# Para cada pasta components/<nome>/ que tenha uma recipe components/<nome>.yaml:
+#   1. Builda o componente (npm ci + npm run build)
+#   2. Gera o zip no formato esperado pela recipe (build/, package.json, package-lock.json)
+#   3. Sobe o artefato para s3://<S3_BUCKET>/<nome>/<versão>/<nome>.zip
+#   4. Registra a nova versão do componente no Greengrass v2
+#
+# Versionamento (semver + Conventional Commits): a última versão publicada do
+# componente é consultada no Greengrass e o incremento é decidido pelas
+# mensagens dos commits do push que tocaram o componente:
+#   - "feat!:" ou "BREAKING CHANGE"  -> major (2.0.0)
+#   - "feat:"                        -> minor (1.1.0)
+#   - qualquer outro (fix, chore...) -> patch (1.0.1)
+# Se o componente nunca foi publicado, usa o ComponentVersion da recipe.
+#
+# Configuração necessária no repositório (Settings > Secrets and variables > Actions):
+#   Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   Variables: S3_BUCKET (nome do bucket), AWS_REGION (opcional, padrão us-east-1)
+#
+# Permissões IAM mínimas do usuário: s3:PutObject no bucket,
+# greengrass:CreateComponentVersion e greengrass:ListComponentVersions.
+name: Publish Greengrass components
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "components/**"
+
+jobs:
+  discover:
+    name: Descobrir componentes
+    runs-on: ubuntu-latest
+    outputs:
+      components: ${{ steps.list.outputs.components }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Listar componentes com recipe
+        id: list
+        run: |
+          components=$(for dir in components/*/; do
+            name=$(basename "$dir")
+            [ -f "components/$name.yaml" ] && echo "$name"
+          done | jq -R . | jq -sc .)
+          echo "Componentes encontrados: $components"
+          echo "components=$components" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publicar ${{ matrix.component }}
+    needs: discover
+    if: needs.discover.outputs.components != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJson(needs.discover.outputs.components) }}
+    env:
+      COMPONENT: ${{ matrix.component }}
+      S3_BUCKET: ${{ vars.S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Histórico completo para analisar as mensagens de commit do push
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: components/${{ matrix.component }}/package-lock.json
+
+      - name: Configurar credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Calcular versão (semver)
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          # Última versão publicada no Greengrass (lista vem em ordem decrescente)
+          account=$(aws sts get-caller-identity --query Account --output text)
+          arn="arn:aws:greengrass:$AWS_REGION:$account:components:$COMPONENT"
+          latest=$(aws greengrassv2 list-component-versions --arn "$arn" \
+            --query 'componentVersions[0].componentVersion' --output text 2>/dev/null || true)
+
+          if [ -z "$latest" ] || [ "$latest" = "None" ]; then
+            # Primeira publicação: usa a versão declarada na recipe
+            version=$(grep -m1 '^ComponentVersion:' "components/$COMPONENT.yaml" \
+              | sed -E 's/.*"?([0-9]+\.[0-9]+\.[0-9]+)"?.*/\1/')
+            echo "Componente ainda não publicado; usando versão da recipe: $version"
+          else
+            # Decide o incremento pelos commits do push que tocaram o componente
+            if git cat-file -e "$BEFORE_SHA" 2>/dev/null; then
+              msgs=$(git log --format=%s "$BEFORE_SHA..HEAD" \
+                -- "components/$COMPONENT" "components/$COMPONENT.yaml")
+              # Componente não foi alterado neste push: trata como patch
+              [ -n "$msgs" ] || msgs=$(git log -1 --format=%s)
+            else
+              # Primeiro push ou force push: considera só o commit atual
+              msgs=$(git log -1 --format=%s)
+            fi
+
+            IFS=. read -r major minor patch <<< "$latest"
+            if echo "$msgs" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE'; then
+              version="$((major + 1)).0.0"
+            elif echo "$msgs" | grep -qE '^feat(\([^)]*\))?:'; then
+              version="$major.$((minor + 1)).0"
+            else
+              version="$major.$minor.$((patch + 1))"
+            fi
+            echo "Última versão publicada: $latest"
+          fi
+
+          echo "Nova versão do componente: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build do componente
+        working-directory: components/${{ matrix.component }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Empacotar artefato
+        working-directory: components/${{ matrix.component }}
+        run: zip -r "$RUNNER_TEMP/$COMPONENT.zip" build package.json package-lock.json
+
+      - name: Enviar artefato para o S3
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          aws s3 cp "$RUNNER_TEMP/$COMPONENT.zip" \
+            "s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip"
+
+      - name: Criar versão do componente no Greengrass
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          sed -e "s|<BUCKET_NAME>|$S3_BUCKET|g" \
+              -e "s|^ComponentVersion:.*|ComponentVersion: \"$VERSION\"|" \
+              -e "s|URI: s3://.*|URI: s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip|" \
+              "components/$COMPONENT.yaml" > "$RUNNER_TEMP/recipe.yaml"
+          aws greengrassv2 create-component-version \
+            --inline-recipe "fileb://$RUNNER_TEMP/recipe.yaml"
