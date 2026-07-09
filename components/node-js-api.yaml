@@ -1,0 +1,64 @@
+# Recipe do componente Greengrass v2 para a API Node.js.
+#
+# Empacotamento esperado do artefato (node-js-api.zip), gerado a partir de
+# components/node-js-api APÓS rodar `npm run build`:
+#   node-js-api.zip
+#   ├── build/            (saída do tsc)
+#   ├── package.json
+#   └── package-lock.json
+#
+# O nome da pasta descompactada ({artifacts:decompressedPath}/node-js-api)
+# corresponde ao nome do zip sem a extensão. Substitua <BUCKET_NAME> pelo
+# bucket S3 usado no deploy.
+#
+# Requisito nos dispositivos: Node.js (com npm) instalado e disponível no
+# PATH do usuário que executa os componentes (ex.: ggc_user).
+---
+RecipeFormatVersion: "2020-01-25"
+ComponentName: node-js-api
+ComponentVersion: "1.0.0"
+ComponentDescription: API simples de Node.js para o AWS IoT Greengrass v2
+ComponentPublisher: Me
+ComponentConfiguration:
+  DefaultConfiguration:
+    Port: "3000"
+Manifests:
+  - Name: Linux
+    Platform:
+      os: linux
+    Lifecycle:
+      Setenv:
+        PORT: "{configuration:/Port}"
+      # O diretório de artefatos é somente leitura; copiamos para o diretório
+      # de trabalho do componente antes de instalar as dependências.
+      Install:
+        Timeout: 600
+        Script: |-
+          set -e
+          cp -r "{artifacts:decompressedPath}/node-js-api/." "{work:path}/"
+          cd "{work:path}"
+          npm ci --omit=dev
+      # Processo de longa duração: o Greengrass mantém o componente RUNNING
+      # enquanto este processo estiver vivo e o reinicia conforme a política
+      # de deployment se ele encerrar.
+      Run:
+        Script: |-
+          cd "{work:path}"
+          node build/index.js
+    Artifacts:
+      - URI: s3://<BUCKET_NAME>/node-js-api/1.0.0/node-js-api.zip
+        Unarchive: ZIP
+  - Name: Windows
+    Platform:
+      os: windows
+    Lifecycle:
+      Setenv:
+        PORT: "{configuration:/Port}"
+      Install:
+        Timeout: 600
+        Script: xcopy "{artifacts:decompressedPath}\node-js-api" "{work:path}" /E /I /Y /Q && cd /d "{work:path}" && npm ci --omit=dev
+      Run:
+        Script: cd /d "{work:path}" && node build\index.js
+    Artifacts:
+      - URI: s3://<BUCKET_NAME>/node-js-api/1.0.0/node-js-api.zip
+        Unarchive: ZIP
