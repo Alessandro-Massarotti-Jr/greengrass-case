@@ -16,7 +16,8 @@
 #
 # Configuração necessária no repositório (Settings > Secrets and variables > Actions):
 #   Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-#   Variables: S3_BUCKET (nome do bucket), AWS_REGION (opcional, padrão us-east-1)
+#   Variables: S3_BUCKET (nome do bucket; também aceito como secret),
+#              AWS_REGION (opcional, padrão us-east-1)
 #
 # Permissões IAM mínimas do usuário: s3:PutObject no bucket,
 # greengrass:CreateComponentVersion e greengrass:ListComponentVersions.
@@ -59,8 +60,16 @@ jobs:
         component: ${{ fromJson(needs.discover.outputs.components) }}
     env:
       COMPONENT: ${{ matrix.component }}
-      S3_BUCKET: ${{ vars.S3_BUCKET }}
+      # Aceita o bucket como variable ou como secret do repositório
+      S3_BUCKET: ${{ vars.S3_BUCKET || secrets.S3_BUCKET }}
     steps:
+      - name: Validar configuração
+        run: |
+          if [ -z "$S3_BUCKET" ]; then
+            echo "::error::S3_BUCKET não configurado. Defina em Settings > Secrets and variables > Actions (como variable ou secret) com o nome do bucket."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           # Histórico completo para analisar as mensagens de commit do push
