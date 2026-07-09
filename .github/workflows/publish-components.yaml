@@ -5,10 +5,10 @@
 #      - Node (package.json): npm ci + npm run build
 #      - Go (go.mod): cross-compile dos binários para linux/amd64 e
 #        windows/amd64 (dispositivos não precisam de Go instalado)
-#   2. Gera os artefatos no formato esperado pela recipe:
-#      - Node: zip com build/, package.json, package-lock.json
-#      - Go: os próprios executáveis (<nome> e <nome>.exe), sem zip
-#   3. Sobe os artefatos para s3://<S3_BUCKET>/<nome>/<versão>/
+#   2. Gera o zip no formato esperado pela recipe:
+#      - Node: build/, package.json, package-lock.json
+#      - Go: os executáveis <nome> (linux) e <nome>.exe (windows) na raiz
+#   3. Sobe o artefato para s3://<S3_BUCKET>/<nome>/<versão>/<nome>.zip
 #   4. Registra a nova versão do componente no Greengrass v2
 #
 # Versionamento (semver + Conventional Commits): a última versão publicada do
@@ -157,24 +157,22 @@ jobs:
             exit 1
           fi
 
-      # Só componentes Node precisam de empacotamento; nos de Go os
-      # executáveis de dist/ já são os artefatos finais.
       - name: Empacotar artefato
-        if: hashFiles(format('components/{0}/package.json', matrix.component)) != ''
         working-directory: components/${{ matrix.component }}
-        run: zip -r "$RUNNER_TEMP/$COMPONENT.zip" build package.json package-lock.json
+        run: |
+          if [ -f package.json ]; then
+            zip -r "$RUNNER_TEMP/$COMPONENT.zip" build package.json package-lock.json
+          else
+            # Executáveis na raiz do zip, como a recipe espera
+            (cd dist && zip "$RUNNER_TEMP/$COMPONENT.zip" ./*)
+          fi
 
-      - name: Enviar artefatos para o S3
+      - name: Enviar artefato para o S3
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if [ -f "components/$COMPONENT/package.json" ]; then
-            aws s3 cp "$RUNNER_TEMP/$COMPONENT.zip" \
-              "s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip"
-          else
-            aws s3 cp "components/$COMPONENT/dist/" \
-              "s3://$S3_BUCKET/$COMPONENT/$VERSION/" --recursive
-          fi
+          aws s3 cp "$RUNNER_TEMP/$COMPONENT.zip" \
+            "s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip"
 
       - name: Criar versão do componente no Greengrass
         env:
