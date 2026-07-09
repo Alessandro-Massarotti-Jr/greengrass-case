@@ -29,21 +29,20 @@ Manifests:
     Lifecycle:
       Setenv:
         PORT: "{configuration:/Port}"
-      # O diretório de artefatos é somente leitura; copiamos para o diretório
-      # de trabalho do componente antes de instalar as dependências.
+      # Instala as dependências e executa diretamente do diretório de
+      # artefatos descompactado.
       Install:
         Timeout: 600
         Script: |-
           set -e
-          cp -r "{artifacts:decompressedPath}/node-js-api/." "{work:path}/"
-          cd "{work:path}"
+          cd "{artifacts:decompressedPath}/node-js-api"
           npm ci --omit=dev
       # Processo de longa duração: o Greengrass mantém o componente RUNNING
       # enquanto este processo estiver vivo e o reinicia conforme a política
       # de deployment se ele encerrar.
       Run:
         Script: |-
-          cd "{work:path}"
+          cd "{artifacts:decompressedPath}/node-js-api"
           node build/index.js
     Artifacts:
       - URI: s3://<BUCKET_NAME>/node-js-api/1.0.0/node-js-api.zip
@@ -56,9 +55,9 @@ Manifests:
         PORT: "{configuration:/Port}"
       Install:
         Timeout: 600
-        Script: xcopy "{artifacts:decompressedPath}\node-js-api" "{work:path}" /E /I /Y /Q && cd /d "{work:path}" && npm ci --omit=dev
+        Script: cd /d "{artifacts:decompressedPath}\node-js-api" && npm ci --omit=dev
       Run:
-        Script: cd /d "{work:path}" && node build\index.js
+        Script: cd /d "{artifacts:decompressedPath}\node-js-api" && node build\index.js
     Artifacts:
       - URI: s3://<BUCKET_NAME>/node-js-api/1.0.0/node-js-api.zip
         Unarchive: ZIP
