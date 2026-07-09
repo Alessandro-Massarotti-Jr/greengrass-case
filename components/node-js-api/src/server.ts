@@ -22,7 +22,7 @@ const gracefulShutdown = async (signal: string) => {
       message: "Servidor encerrado com sucesso.",
       data: {},
     });
-    process.exit(0);
+    process.exit(1);
   } catch (err) {
     logger.error({
       action: "server",
