@@ -1,9 +1,14 @@
 # Publica uma nova versão de cada componente Greengrass a cada push na main.
 #
 # Para cada pasta components/<nome>/ que tenha uma recipe components/<nome>.yaml:
-#   1. Builda o componente (npm ci + npm run build)
-#   2. Gera o zip no formato esperado pela recipe (build/, package.json, package-lock.json)
-#   3. Sobe o artefato para s3://<S3_BUCKET>/<nome>/<versão>/<nome>.zip
+#   1. Builda o componente conforme o tipo:
+#      - Node (package.json): npm ci + npm run build
+#      - Go (go.mod): cross-compile dos binários para linux/amd64 e
+#        windows/amd64 (dispositivos não precisam de Go instalado)
+#   2. Gera os artefatos no formato esperado pela recipe:
+#      - Node: zip com build/, package.json, package-lock.json
+#      - Go: os próprios executáveis (<nome> e <nome>.exe), sem zip
+#   3. Sobe os artefatos para s3://<S3_BUCKET>/<nome>/<versão>/
 #   4. Registra a nova versão do componente no Greengrass v2
 #
 # Versionamento (semver + Conventional Commits): a última versão publicada do
@@ -76,10 +81,17 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
+        if: hashFiles(format('components/{0}/package.json', matrix.component)) != ''
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: components/${{ matrix.component }}/package-lock.json
+
+      - uses: actions/setup-go@v5
+        if: hashFiles(format('components/{0}/go.mod', matrix.component)) != ''
+        with:
+          go-version: stable
+          cache: false
 
       - name: Configurar credenciais AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -133,27 +145,46 @@ jobs:
       - name: Build do componente
         working-directory: components/${{ matrix.component }}
         run: |
-          npm ci
-          npm run build
+          if [ -f package.json ]; then
+            npm ci
+            npm run build
+          elif [ -f go.mod ]; then
+            # Binários estáticos para as duas plataformas da recipe
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "dist/$COMPONENT" .
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "dist/$COMPONENT.exe" .
+          else
+            echo "::error::Tipo de componente não reconhecido (sem package.json nem go.mod)."
+            exit 1
+          fi
 
+      # Só componentes Node precisam de empacotamento; nos de Go os
+      # executáveis de dist/ já são os artefatos finais.
       - name: Empacotar artefato
+        if: hashFiles(format('components/{0}/package.json', matrix.component)) != ''
         working-directory: components/${{ matrix.component }}
         run: zip -r "$RUNNER_TEMP/$COMPONENT.zip" build package.json package-lock.json
 
-      - name: Enviar artefato para o S3
+      - name: Enviar artefatos para o S3
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          aws s3 cp "$RUNNER_TEMP/$COMPONENT.zip" \
-            "s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip"
+          if [ -f "components/$COMPONENT/package.json" ]; then
+            aws s3 cp "$RUNNER_TEMP/$COMPONENT.zip" \
+              "s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip"
+          else
+            aws s3 cp "components/$COMPONENT/dist/" \
+              "s3://$S3_BUCKET/$COMPONENT/$VERSION/" --recursive
+          fi
 
       - name: Criar versão do componente no Greengrass
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # No URI, troca bucket e versão preservando o nome do arquivo
+          # (componentes Go têm um artefato por plataforma).
           sed -e "s|<BUCKET_NAME>|$S3_BUCKET|g" \
               -e "s|^ComponentVersion:.*|ComponentVersion: \"$VERSION\"|" \
-              -e "s|URI: s3://.*|URI: s3://$S3_BUCKET/$COMPONENT/$VERSION/$COMPONENT.zip|" \
+              -e "s|URI: s3://[^/]*/$COMPONENT/[^/]*/|URI: s3://$S3_BUCKET/$COMPONENT/$VERSION/|" \
               "components/$COMPONENT.yaml" > "$RUNNER_TEMP/recipe.yaml"
           aws greengrassv2 create-component-version \
             --inline-recipe "fileb://$RUNNER_TEMP/recipe.yaml"

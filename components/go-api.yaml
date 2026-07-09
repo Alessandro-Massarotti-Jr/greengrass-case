@@ -1,0 +1,51 @@
+# Recipe do componente Greengrass v2 para a API Go.
+#
+# Os artefatos são os próprios executáveis, cross-compilados pela action a
+# partir de components/go-api (sem zip):
+#   s3://<BUCKET_NAME>/go-api/<versão>/go-api        (linux/amd64)
+#   s3://<BUCKET_NAME>/go-api/<versão>/go-api.exe    (windows/amd64)
+#
+# Cada manifest referencia apenas o binário da sua plataforma, então o
+# dispositivo baixa somente o arquivo que vai executar. Substitua
+# <BUCKET_NAME> pelo bucket S3 usado no deploy.
+#
+# Os dispositivos não precisam de Go instalado: o binário chega pronto e é
+# executado direto do diretório de artefatos. No Linux, a permissão de
+# execução é concedida via Permission.Execute.
+---
+RecipeFormatVersion: "2020-01-25"
+ComponentName: go-api
+ComponentVersion: "1.0.0"
+ComponentDescription: API simples em Go para o AWS IoT Greengrass v2
+ComponentPublisher: Me
+ComponentConfiguration:
+  DefaultConfiguration:
+    Port: "3001"
+Manifests:
+  - Name: Linux
+    Platform:
+      os: linux
+    Lifecycle:
+      Setenv:
+        PORT: "{configuration:/Port}"
+      # Processo de longa duração: o Greengrass mantém o componente RUNNING
+      # enquanto este processo estiver vivo e o reinicia conforme a política
+      # de deployment se ele encerrar.
+      Run:
+        Script: |-
+          "{artifacts:path}/go-api"
+    Artifacts:
+      - URI: s3://<BUCKET_NAME>/go-api/1.0.0/go-api
+        Permission:
+          Read: OWNER
+          Execute: OWNER
+  - Name: Windows
+    Platform:
+      os: windows
+    Lifecycle:
+      Setenv:
+        PORT: "{configuration:/Port}"
+      Run:
+        Script: '"{artifacts:path}\go-api.exe"'
+    Artifacts:
+      - URI: s3://<BUCKET_NAME>/go-api/1.0.0/go-api.exe
