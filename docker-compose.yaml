@@ -1,0 +1,13 @@
+services:
+  greengrass-machine:
+    image: ubuntu/26.10
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "3002:3002"
+    networks:
+      - defaultNetwork
+
+networks:
+  defaultNetwork:
+    driver: bridge
