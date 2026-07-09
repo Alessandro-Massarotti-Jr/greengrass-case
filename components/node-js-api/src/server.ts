@@ -5,7 +5,7 @@ const server = fastify();
 const logger = Logger.getInstance();
 
 server.get("/", async (request, reply) => {
-  return { message: "Hello, World! from my Node App" };
+  return { message: "Hello, World! from my Node App!!!" };
 });
 
 const gracefulShutdown = async (signal: string) => {
