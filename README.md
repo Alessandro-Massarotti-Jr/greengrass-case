@@ -25,10 +25,14 @@ Passo a passo do GreenGrass:
    3. Adicionar as credenciais deste usuario no dispositivo desejado
    4. instalar o greengrass no dispositivo
       1. curl -s https://d2s8p88vqu9w66.cloudfront.net/releases/greengrass-nucleus-latest.zip > greengrass-nucleus-latest.zip && unzip greengrass-nucleus-latest.zip -d GreengrassInstaller
-      2. sudo -E java -Droot="/greengrass/v2" -Dlog.store=FILE -jar ./GreengrassInstaller/lib/Greengrass.jar --aws-region us-east-1 --thing-name unidade-0  --component-default-user ggc_user:ggc_group --provision true --setup-system-service true --deploy-dev-tools true
-   5. Adicionar a integração em um bucket S3
-   6. Criar um componente greengrass para aquele bucket
-   7. Criar um deployment para o grupo de things
+      2. sudo -E java -Droot="/greengrass/v2" -Dlog.store=FILE -jar ./GreengrassInstaller/lib/Greengrass.jar --aws-region us-east-1 --thing-name <device-name> --thing-group-name <group-name> --component-default-user <ggc_user:ggc_group> --provision true --setup-system-service true --deploy-dev-tools true
+2. Criar componente Greengrass
+   1. Adicionar a integração em um bucket S3
+   2. Criar um componente greengrass para aquele bucket
+3. Criar um deployment para uma unidade ou grupo com os componentes desejados
+
+
+É bem legal esse carinha facilita bastante para atualizar e adicionar novos softwares em varios dispositivos, uma pena que ele não tem um errorHandling autonome para aplicações de longa duração, sendo necessario atualizar eles sempre gerando um novo deploy
 
 ---
 
